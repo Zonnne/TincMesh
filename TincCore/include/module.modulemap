@@ -1,0 +1,5 @@
+// Exposes the TincCore C API to Swift as `import CTinc`.
+module CTinc {
+    header "../ios/tinc_ios.h"
+    export *
+}

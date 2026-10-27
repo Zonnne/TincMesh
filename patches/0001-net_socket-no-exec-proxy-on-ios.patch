@@ -1,0 +1,11 @@
+--- a/src/net_socket.c	2019-07-17 23:33:43.000000000 +0000
++++ b/src/net_socket.c	2026-10-27 04:26:06.160201817 +0000
+@@ -389,7 +389,7 @@
+ }
+ 
+ static void do_outgoing_pipe(connection_t *c, const char *command) {
+-#ifndef HAVE_MINGW
++#if !defined(HAVE_MINGW) && !defined(TINC_IOS) /* tinc-ios: no process spawning on iOS */
+ 	int fd[2];
+ 
+ 	if(socketpair(AF_UNIX, SOCK_STREAM, 0, fd)) {

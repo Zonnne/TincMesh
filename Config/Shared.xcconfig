@@ -1,0 +1,11 @@
+// Change these to your own identifiers before building for a device.
+// The Network Extension and App Group capabilities must be enabled for
+// both App IDs in your Apple Developer account.
+
+BUNDLE_ID_PREFIX = com.example
+APP_BUNDLE_ID = $(BUNDLE_ID_PREFIX).tincmesh
+APP_GROUP_IDENTIFIER = group.$(APP_BUNDLE_ID)
+
+// Your Apple Developer Team ID.
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
