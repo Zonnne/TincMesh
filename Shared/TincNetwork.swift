@@ -12,6 +12,7 @@ struct TincNetwork: Hashable {
     var hostsURL: URL { directory.appendingPathComponent("hosts", isDirectory: true) }
     var privateKeyURL: URL { directory.appendingPathComponent("ed25519_key.priv") }
     var settingsURL: URL { directory.appendingPathComponent(TunnelSettings.fileName) }
+    var rulesURL: URL { directory.appendingPathComponent(PolicyRules.fileName) }
 
     func hostURL(_ node: String) -> URL {
         hostsURL.appendingPathComponent(node)

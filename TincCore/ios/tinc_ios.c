@@ -36,6 +36,7 @@
 #include "../tinc/xalloc.h"
 
 #include "tinc_ios.h"
+#include "policy.h"
 #include "tinc_ios_private.h"
 
 /* Normally defined in tincd.c. */
@@ -55,6 +56,7 @@ static pthread_mutex_t status_request_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool in_run = false;
 static bool running = false;
 static bool stop_requested = false;
+static char *policy_text = NULL;   /* rules to install; NULL disables */
 static int ctl_write_fd = -1;
 static char *status_result = NULL;
 static bool status_done = false;
@@ -285,13 +287,42 @@ static char *build_status_json(void) {
 		json_raw(&j, "}");
 	}
 
-	json_raw(&j, "]}");
+	json_raw(&j, "]");
+
+	char *policy = policy_status_json();
+	json_key(&j, &first, "policy");
+	json_raw(&j, policy);
+	free(policy);
+
+	json_raw(&j, "}");
 	return j.buf;
 }
 
 /* ---------------------------------------------------------------------
    Control pipe (other threads -> tinc thread)
    --------------------------------------------------------------------- */
+
+/* Installs the current rules (tinc thread). */
+static void apply_policy(void) {
+	pthread_mutex_lock(&state_lock);
+	char *text = policy_text ? xstrdup(policy_text) : NULL;
+	pthread_mutex_unlock(&state_lock);
+
+	policy_t *policy = NULL;
+
+	if(text) {
+		char error[256];
+		policy = policy_parse(text, error, sizeof(error));
+
+		if(!policy) {
+			logger(DEBUG_ALWAYS, LOG_ERR, "Invalid rules, policy routing disabled: %s", error);
+		}
+
+		free(text);
+	}
+
+	policy_install(policy, &tinc_ios_policy_io);
+}
 
 static void ctl_handler(void *data, int flags) {
 	(void)data;
@@ -319,6 +350,10 @@ static void ctl_handler(void *data, int flags) {
 				event_exit();
 			}
 
+			break;
+
+		case 'p':
+			apply_policy();
 			break;
 
 		case 's': {
@@ -363,6 +398,42 @@ void tinc_ios_retry(void) {
 
 void tinc_ios_reload(void) {
 	ctl_send('h');
+}
+
+char *tinc_ios_policy_check(const char *rules, char *error, size_t error_len) {
+	policy_t *policy = policy_parse(rules, error, error_len);
+
+	if(!policy) {
+		return NULL;
+	}
+
+	char *summary = policy_summary_json(policy);
+	policy_free(policy);
+	return summary;
+}
+
+bool tinc_ios_set_policy(const char *rules, char *error, size_t error_len) {
+	if(error && error_len) {
+		*error = 0;
+	}
+
+	if(rules && *rules) {
+		policy_t *policy = policy_parse(rules, error, error_len);
+
+		if(!policy) {
+			return false;
+		}
+
+		policy_free(policy);
+	}
+
+	pthread_mutex_lock(&state_lock);
+	free(policy_text);
+	policy_text = rules && *rules ? xstrdup(rules) : NULL;
+	pthread_mutex_unlock(&state_lock);
+
+	ctl_send('p');
+	return true;
 }
 
 char *tinc_ios_status_json(void) {
@@ -569,6 +640,8 @@ int tinc_ios_run(const tinc_ios_options *options) {
 		goto end;
 	}
 
+	apply_policy();
+
 	logger(DEBUG_ALWAYS, LOG_NOTICE, "Ready");
 
 	if(options->ready) {
@@ -589,6 +662,7 @@ int tinc_ios_run(const tinc_ios_options *options) {
 
 end:
 	close_ctl_pipe();
+	policy_shutdown();
 
 	/* Like tincd, tear down even after a failed setup_network(). */
 	if(setup_attempted) {

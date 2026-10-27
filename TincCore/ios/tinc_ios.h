@@ -67,6 +67,26 @@ void tinc_ios_reload(void);
 char *tinc_ios_status_json(void);
 
 /* ---------------------------------------------------------------------
+   Rule-based routing (policy.c)
+   --------------------------------------------------------------------- */
+
+/* Validates a rules file (Shadowrocket-style [General], [Proxy Group] and
+   [Rule] sections). Returns a malloc()ed JSON summary of what the tunnel
+   must capture:
+     {"dns_address": "198.18.0.2", "fake_range": "198.18.0.0/15",
+      "capture_all_dns": bool, "default_route": bool,
+      "match_domains": [...], "include_routes": [...], "exclude_routes": [...],
+      "groups": [...], "nodes": [...], "warnings": [...], "rules": n, "final": "..."}
+   or NULL with error filled in (including the line number). */
+char *tinc_ios_policy_check(const char *rules, char *error, size_t error_len);
+
+/* Sets the rules used by tinc_ios_run(); NULL or "" disables rule-based
+   routing. Safe from any thread: a running tinc switches immediately
+   (resetting fake addresses and flows), otherwise the rules apply at the
+   next start. Returns false, with error filled in, if the rules are invalid. */
+bool tinc_ios_set_policy(const char *rules, char *error, size_t error_len);
+
+/* ---------------------------------------------------------------------
    Keys and configuration helpers (usable from the app process)
    --------------------------------------------------------------------- */
 

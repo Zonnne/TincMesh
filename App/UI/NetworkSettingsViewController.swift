@@ -89,6 +89,16 @@ final class NetworkSettingsViewController: StaticTableViewController, UIDocument
             ]))
 
         result.append(Section(
+            "Routing",
+            footer: "Send chosen sites through chosen nodes, for example streaming through one exit node and work traffic through another.",
+            rows: [
+                Row("Rules", .navigation(settings.rulesEnabled ? "On" : "Off"), image: UIImage(systemName: "arrow.triangle.branch")) { [weak self] in
+                    guard let self else { return }
+                    self.navigationController?.pushViewController(RulesViewController(network: self.network), animated: true)
+                },
+            ]))
+
+        result.append(Section(
             "DNS",
             footer: "With search domains set, only those names are resolved by these servers unless an exit node is used.",
             rows: [

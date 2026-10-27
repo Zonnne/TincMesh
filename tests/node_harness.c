@@ -10,6 +10,10 @@
     Usage:
       node_harness responder <confbase> <logfile> <my-ip>
           Answer pings until SIGTERM/SIGINT.
+      node_harness exit <confbase> <logfile> <my-ip> <name>
+          Act as an exit node's "internet": answer DNS queries to any
+          address (every A record is 198.51.100.7), echo UDP datagrams to
+          any address back prefixed with "<name>:", and answer pings.
       node_harness ping <confbase> <logfile> <my-ip> <peer-ip> [--restart]
           Ping peer (small and large packets), exercise status/retry/
           reload, stop; with --restart run tinc a second time in the same
@@ -38,6 +42,7 @@ static uint32_t my_ip;
 static uint32_t peer_ip;
 static int app_fd = -1;
 static volatile sig_atomic_t terminate = 0;
+static const char *exit_name = NULL;
 
 static pthread_mutex_t ready_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ready_cond = PTHREAD_COND_INITIALIZER;
@@ -101,9 +106,101 @@ static size_t make_ping(uint8_t *buf, size_t len, uint32_t src, uint32_t dst, ui
 	return len;
 }
 
+/* Sends a UDP datagram from src:sport to dst:dport. */
+static void send_udp(const uint8_t *src, uint16_t sport, const uint8_t *dst, uint16_t dport, const uint8_t *payload, size_t plen) {
+	uint8_t pkt[2048];
+	size_t len = 28 + plen;
+
+	if(len > sizeof(pkt)) {
+		return;
+	}
+
+	memset(pkt, 0, 28);
+	pkt[0] = 0x45;
+	pkt[2] = len >> 8;
+	pkt[3] = len & 0xff;
+	pkt[8] = 64;
+	pkt[9] = 17;
+	memcpy(pkt + 12, src, 4);
+	memcpy(pkt + 16, dst, 4);
+	uint16_t sum = checksum(pkt, 20);
+	memcpy(pkt + 10, &sum, 2);
+	pkt[20] = sport >> 8;
+	pkt[21] = sport & 0xff;
+	pkt[22] = dport >> 8;
+	pkt[23] = dport & 0xff;
+	pkt[24] = (8 + plen) >> 8;
+	pkt[25] = (8 + plen) & 0xff;
+	memcpy(pkt + 28, payload, plen);   /* UDP checksum 0: none */
+	send(app_fd, pkt, len, 0);
+}
+
+/* Exit node behaviour: answer for any destination address. */
+static void handle_exit_packet(const uint8_t *buf, ssize_t len) {
+	if(len < 28 || (buf[0] >> 4) != 4 || buf[9] != 17) {
+		return;
+	}
+
+	size_t ihl = (buf[0] & 0xf) * 4;
+	const uint8_t *udp = buf + ihl;
+	uint16_t sport = udp[0] << 8 | udp[1];
+	uint16_t dport = udp[2] << 8 | udp[3];
+	size_t plen = (size_t)len - ihl - 8;
+	const uint8_t *payload = udp + 8;
+	uint8_t reply[1500];
+
+	if(dport == 53 && plen >= 17) {
+		/* DNS: echo the question, and for A queries add 198.51.100.7. */
+		size_t qend = 12;
+
+		while(qend < plen && payload[qend]) {
+			qend += payload[qend] + 1;
+		}
+
+		qend += 5;
+
+		if(qend > plen || qend + 16 > sizeof(reply)) {
+			return;
+		}
+
+		uint16_t qtype = payload[qend - 4] << 8 | payload[qend - 3];
+		memcpy(reply, payload, qend);
+		reply[2] = 0x81;
+		reply[3] = 0x80;
+		reply[6] = 0;
+		reply[7] = qtype == 1;
+		memset(reply + 8, 0, 4);
+		size_t rlen = qend;
+
+		if(qtype == 1) {
+			const uint8_t rr[16] = {0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 1, 0x2c, 0, 4, 198, 51, 100, 7};
+			memcpy(reply + qend, rr, sizeof(rr));
+			rlen += sizeof(rr);
+		}
+
+		send_udp(buf + 16, dport, buf + 12, sport, reply, rlen);
+		return;
+	}
+
+	size_t nlen = strlen(exit_name);
+
+	if(nlen + 1 + plen > sizeof(reply)) {
+		return;
+	}
+
+	memcpy(reply, exit_name, nlen);
+	reply[nlen] = ':';
+	memcpy(reply + nlen + 1, payload, plen);
+	send_udp(buf + 16, dport, buf + 12, sport, reply, nlen + 1 + plen);
+}
+
 /* Handles one packet from tinc. Returns the echo reply sequence number
    (>= 0) if this was a valid reply from the peer, -1 otherwise. */
 static int handle_packet(uint8_t *buf, ssize_t len) {
+	if(exit_name) {
+		handle_exit_packet(buf, len);
+	}
+
 	if(len < 28 || (buf[0] >> 4) != 4 || buf[9] != 1) {
 		return -1;
 	}
@@ -370,6 +467,11 @@ int main(int argc, char *argv[]) {
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
 	if(!strcmp(argv[1], "responder")) {
+		return responder();
+	}
+
+	if(!strcmp(argv[1], "exit") && argc >= 6) {
+		exit_name = argv[5];
 		return responder();
 	}
 

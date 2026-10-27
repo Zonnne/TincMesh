@@ -4,12 +4,18 @@ import UIKit
 final class TextEditorViewController: UIViewController, UITextViewDelegate {
     private let url: URL
     private let onSave: () -> Void
+    private let validate: ((String) -> String?)?
     private let textView = UITextView()
     private var original = ""
+    private let initialText: String?
 
-    init(title: String, url: URL, onSave: @escaping () -> Void = {}) {
+    /// `validate` returns an error message to block saving, or nil if the text is fine.
+    init(title: String, url: URL, initialText: String? = nil,
+         validate: ((String) -> String?)? = nil, onSave: @escaping () -> Void = {}) {
         self.url = url
         self.onSave = onSave
+        self.validate = validate
+        self.initialText = initialText
         super.init(nibName: nil, bundle: nil)
         self.title = title
     }
@@ -46,12 +52,12 @@ final class TextEditorViewController: UIViewController, UITextViewDelegate {
         ])
 
         original = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        textView.text = original
+        textView.text = original.isEmpty ? (initialText ?? "") : original
 
         navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .save, primaryAction: UIAction { [weak self] _ in
             self?.save()
         })
-        navigationItem.rightBarButtonItem?.isEnabled = false
+        navigationItem.rightBarButtonItem?.isEnabled = textView.text != original
     }
 
     func textViewDidChange(_ textView: UITextView) {
@@ -62,6 +68,10 @@ final class TextEditorViewController: UIViewController, UITextViewDelegate {
         var text = textView.text ?? ""
         if !text.isEmpty && !text.hasSuffix("\n") {
             text += "\n"
+        }
+        if let problem = validate?(text) {
+            showAlert(title: "Not saved", message: problem)
+            return
         }
         do {
             try Data(text.utf8).write(to: url, options: .atomic)

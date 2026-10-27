@@ -19,6 +19,8 @@ struct TunnelSettings: Codable, Equatable {
     var useExitNode: Bool = false
     /// tinc debug level (0 = errors and basic status ... 5 = everything).
     var logLevel: Int = 1
+    /// Route sites through chosen nodes using the rules in rules.conf (see PolicyRules).
+    var rulesEnabled: Bool = false
 
     static let fileName = "ios.json"
 
@@ -36,5 +38,6 @@ struct TunnelSettings: Codable, Equatable {
         routePeerSubnets = try c.decodeIfPresent(Bool.self, forKey: .routePeerSubnets) ?? defaults.routePeerSubnets
         useExitNode = try c.decodeIfPresent(Bool.self, forKey: .useExitNode) ?? defaults.useExitNode
         logLevel = try c.decodeIfPresent(Int.self, forKey: .logLevel) ?? defaults.logLevel
+        rulesEnabled = try c.decodeIfPresent(Bool.self, forKey: .rulesEnabled) ?? defaults.rulesEnabled
     }
 }

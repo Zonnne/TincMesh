@@ -115,6 +115,55 @@ case "join":
     }
     check((try? store.join(invitation: "127.0.0.1:1/" + String(repeating: "A", count: 48), netname: nil)) == nil, "bad invitation fails")
 
+case "rules":
+    let network = store.network(named: "alpha")!
+    // The template must be valid as shipped.
+    let template = try! TincCore.checkRules(PolicyRules.template)
+    check(template.rules == 0 && template.final == "DIRECT" && !template.captureAllDns, "template is valid: \(template)")
+
+    var settings = network.loadSettings()
+    settings.dnsServers = ["10.77.0.53"]
+    settings.searchDomains = ["corp"]
+    let text = """
+    [Proxy Group]
+    media = fallback, node_x, node_y
+    [Rule]
+    DOMAIN-SUFFIX,netflix.com,media
+    IP-CIDR,203.0.113.0/24,node_y
+    IP-CIDR,192.0.2.0/24,DIRECT
+    FINAL,node_x
+    """
+    let effective = PolicyRules.effectiveText(text, settings: settings)
+    check(effective.hasPrefix(text) && effective.contains("mesh-dns-server = 10.77.0.53") && effective.contains("mesh-domains = corp"),
+          "mesh DNS appended after the user's rules:\n\(effective)")
+    let summary = try! TincCore.checkRules(effective)
+    check(summary.matchDomains == ["netflix.com", "corp"], "split DNS domains: \(summary.matchDomains)")
+    check(summary.captureAllDns && summary.defaultRoute, "FINAL through a node captures DNS and the default route")
+    check(summary.includeRoutes == ["203.0.113.0/24"] && summary.excludeRoutes == ["192.0.2.0/24"], "routes: \(summary)")
+    check(summary.groups == ["media"] && summary.nodes.sorted() == ["node_x", "node_y"], "groups and nodes")
+    do {
+        _ = try TincCore.checkRules("[Rule]\nDOMAIN,a.test,bad name\n")
+        check(false, "invalid rules accepted")
+    } catch {
+        check(error.localizedDescription.hasPrefix("Line 2:"), "error has line number: \(error.localizedDescription)")
+    }
+
+    try! Data(text.utf8).write(to: network.rulesURL)
+    settings.rulesEnabled = false
+    check(network.activeRules(settings) == nil, "no rules when disabled")
+    settings.rulesEnabled = true
+    check(network.activeRules(settings) == effective, "active rules when enabled")
+    try! FileManager.default.removeItem(at: network.rulesURL)
+
+    let live = MeshStatus.decode(Data("""
+    {"version":"1.1pre18","name":"a","port":"1","now":1,"nodes":[],"edges":[],"connections":[],
+     "policy":{"enabled":true,"rules":3,"flows":2,"fake_ips":1,"dns_pending":0,"dns_queries":5,"dns_fake":1,
+               "dns_direct":4,"dns_rejected":0,"dns_failed":0,"routed_packets":9,"rejected_packets":0,
+               "groups":[{"name":"media","selected":"node_x"},{"name":"b","selected":null}]}}
+    """.utf8))
+    check(live?.policy?.flows == 2 && live?.policy?.groups?.first?.selected == "node_x" && live?.policy?.groups?.last?.selected == nil,
+          "policy status decodes")
+
 case "status":
     let data = try! Data(contentsOf: URL(fileURLWithPath: args[3]))
     guard let status = MeshStatus.decode(data) else {

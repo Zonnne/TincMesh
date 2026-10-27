@@ -21,7 +21,7 @@ TINC_SRCS := $(filter-out $(CORE)/tinc/tincd.c $(CORE)/tinc/control.c $(CORE)/ti
 IOS_SRCS := $(wildcard $(CORE)/ios/*.c)
 OBJS := $(patsubst $(CORE)/%.c,$(BUILD)/%.o,$(TINC_SRCS) $(IOS_SRCS))
 
-all: $(BUILD)/libtinccore.a $(BUILD)/node_harness $(BUILD)/join_harness
+all: $(BUILD)/libtinccore.a $(BUILD)/node_harness $(BUILD)/join_harness $(BUILD)/policy_harness
 
 $(BUILD)/%.o: $(CORE)/%.c
 	@mkdir -p $(dir $@)

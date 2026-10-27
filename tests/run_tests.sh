@@ -125,6 +125,29 @@ print("  gamma via=%s udp_confirmed=%s pmtu=%d" % (g["via"], g["udp_confirmed"],
 ' "$WORK/beta/status.json" || fail "status JSON"
 pass "three-node mesh, status JSON is valid"
 
+echo "== rule-based routing: two exit nodes, per-site policies"
+# x and y are exit nodes: both announce the whole IPv4 Internet.
+make_node x 10.99.0.11 "$((BASE_PORT + 20))" alpha
+make_node y 10.99.0.12 "$((BASE_PORT + 21))" alpha
+make_node phone 10.99.0.20 "$((BASE_PORT + 22))" alpha
+# Exit nodes hand everything they receive to their OS (which would NAT it to
+# the Internet); otherwise tinc forwards by Subnet and both would pick x.
+for n in x y; do
+	echo "Subnet = 0.0.0.0/0" >>"$WORK/$n/hosts/$n"
+	echo "Forwarding = kernel" >>"$WORK/$n/tinc.conf"
+done
+for n in x y phone; do
+	cp "$WORK/$n/hosts/$n" "$WORK/alpha/hosts/"
+	cp "$WORK/alpha/hosts/alpha" "$WORK/$n/hosts/"
+done
+for n in x y; do cp "$WORK/$n/hosts/$n" "$WORK/phone/hosts/"; done
+"$BUILD/node_harness" exit "$WORK/x" "$WORK/x.log" 10.99.0.11 x >"$WORK/x.out" 2>&1 &
+PIDS="$PIDS $!"
+"$BUILD/node_harness" exit "$WORK/y" "$WORK/y.log" 10.99.0.12 y >"$WORK/y.out" 2>&1 &
+PIDS="$PIDS $!"
+"$BUILD/policy_harness" "$WORK/phone" "$WORK/phone.log" 10.99.0.20 "$((BASE_PORT + 30))" || fail "rule-based routing"
+pass "domain, keyword, group and IP rules route through the chosen exit node; live rule changes"
+
 echo "== Swift Shared/ layer (NetworkStore, TincConfigFile, MeshStatus) against TincCore"
 SWIFTC=${SWIFTC:-$(command -v swiftc || true)}
 if [ -z "$SWIFTC" ]; then
@@ -137,6 +160,7 @@ else
 	SPORT=$((BASE_PORT + 10))
 	"$BUILD/shared_tests" "$C" unit || fail "Swift unit tests"
 	"$BUILD/shared_tests" "$C" create "$SPORT" || fail "NetworkStore.create"
+	"$BUILD/shared_tests" "$C" rules || fail "PolicyRules"
 	SURL=$("$BUILD/shared_tests" "$C" invite "$SPORT" | head -1) || fail "NetworkStore.invite"
 	"$BUILD/node_harness" responder "$C/networks/alpha" "$WORK/swift-alpha.log" 10.77.0.1 >"$WORK/swift-alpha.out" 2>&1 &
 	PIDS="$PIDS $!"
@@ -144,7 +168,7 @@ else
 	"$BUILD/shared_tests" "$C" join "$SURL" || fail "NetworkStore.join"
 	"$BUILD/node_harness" ping "$C/networks/alpha-2" "$WORK/swift-phone.log" 10.77.0.9 10.77.0.1 alpha || fail "joined network (created by Swift) cannot reach alpha"
 	"$BUILD/shared_tests" "$C" status "$C/networks/alpha-2/status.json" || fail "MeshStatus decoding"
-	pass "Swift Shared/ layer: create, invite, join, connect, decode status"
+	pass "Swift Shared/ layer: create, invite, join, connect, rules, decode status"
 fi
 
 echo "ALL TESTS PASSED"

@@ -40,6 +40,26 @@ enum TincCore {
         return try JSONDecoder().decode(JoinResult.self, from: Data(String(cString: json).utf8))
     }
 
+    /// Validates rules; returns what the tunnel must capture, or throws with the line number.
+    static func checkRules(_ text: String) throws -> PolicyRules.Summary {
+        var error = [CChar](repeating: 0, count: 512)
+        guard let json = tinc_ios_policy_check(text, &error, error.count) else {
+            throw TincMeshError(String(cString: error))
+        }
+        defer { free(json) }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(PolicyRules.Summary.self, from: Data(String(cString: json).utf8))
+    }
+
+    /// Installs rules for tinc (nil disables them). Takes effect immediately if tinc is running.
+    static func setRules(_ text: String?) throws {
+        var error = [CChar](repeating: 0, count: 512)
+        guard tinc_ios_set_policy(text, &error, error.count) else {
+            throw TincMeshError(String(cString: error))
+        }
+    }
+
     /// Creates an invitation for a new node; returns its URL.
     static func invite(directory: URL, netname: String?, invitee: String, address: String, extraLines: String?) throws -> String {
         var error = [CChar](repeating: 0, count: 512)

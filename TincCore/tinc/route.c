@@ -34,6 +34,23 @@
 #include "utils.h"
 
 rmode_t routing_mode = RMODE_ROUTER;
+
+#ifdef TINC_IOS
+/* tinc-ios: set by the iOS device layer while routing a packet from the
+   local device when a policy rule picked the node that must carry it
+   (e.g. an exit node). NULL means route by Subnet as usual. */
+node_t *tinc_ios_route_override = NULL;
+
+static subnet_t *tinc_ios_apply_override(node_t *source, subnet_t *subnet, subnet_t *storage) {
+	if(source != myself || !tinc_ios_route_override || !tinc_ios_route_override->status.reachable) {
+		return subnet;
+	}
+
+	memset(storage, 0, sizeof(*storage));
+	storage->owner = tinc_ios_route_override;
+	return storage;
+}
+#endif
 fmode_t forwarding_mode = FMODE_INTERNAL;
 bmode_t broadcast_mode = BMODE_MST;
 bool decrement_ttl = false;
@@ -631,6 +648,10 @@ static void route_ipv4(node_t *source, vpn_packet_t *packet) {
 
 	memcpy(&dest, &DATA(packet)[30], sizeof(dest));
 	subnet = lookup_subnet_ipv4(&dest);
+#ifdef TINC_IOS
+	subnet_t override_subnet;
+	subnet = tinc_ios_apply_override(source, subnet, &override_subnet);
+#endif
 
 	if(!subnet) {
 		logger(DEBUG_TRAFFIC, LOG_WARNING, "Cannot route packet from %s (%s): unknown IPv4 destination address %d.%d.%d.%d",
@@ -721,6 +742,10 @@ static void route_ipv6(node_t *source, vpn_packet_t *packet) {
 
 	memcpy(&dest, &DATA(packet)[38], sizeof(dest));
 	subnet = lookup_subnet_ipv6(&dest);
+#ifdef TINC_IOS
+	subnet_t override_subnet;
+	subnet = tinc_ios_apply_override(source, subnet, &override_subnet);
+#endif
 
 	if(!subnet) {
 		logger(DEBUG_TRAFFIC, LOG_WARNING, "Cannot route packet from %s (%s): unknown IPv6 destination address %hx:%hx:%hx:%hx:%hx:%hx:%hx:%hx",

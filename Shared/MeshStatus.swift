@@ -8,6 +8,8 @@ enum TunnelCommand: String, Codable {
     case retry
     /// Re-read configuration (like `tinc reload`), e.g. after adding a host or invitation.
     case reload
+    /// Re-read rules.conf and apply it without reconnecting.
+    case reloadRules
 }
 
 /// A snapshot of tinc's view of the mesh, produced by tinc_ios_status_json().
@@ -92,6 +94,7 @@ struct MeshStatus: Decodable {
     let nodes: [Node]
     let edges: [Edge]
     let connections: [Connection]
+    let policy: PolicyStatus?
 
     static func decode(_ data: Data) -> MeshStatus? {
         let decoder = JSONDecoder()

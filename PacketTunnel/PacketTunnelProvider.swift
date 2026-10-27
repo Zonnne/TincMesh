@@ -7,7 +7,9 @@ import os.log
 /// Startup: load the selected network from the App Group, apply interface
 /// addresses and routes (what tinc-up does elsewhere), create the packet
 /// socketpair, then run tinc on its own thread. Routes to Subnets learned
-/// from the mesh are kept up to date while connected.
+/// from the mesh are kept up to date while connected. With rule-based
+/// routing on, DNS for matching names and the fake address range are sent
+/// into the tunnel, where tinc's policy engine picks the node for each site.
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let log = OSLog(subsystem: "TincMesh", category: "tunnel")
     private let queue = DispatchQueue(label: "tincmesh.provider")
@@ -20,6 +22,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var lastPathSignature: String?
     private var routeTimer: DispatchSourceTimer?
     private var appliedRoutes: [IPAddressRange] = []
+    /// What the active rules need captured; nil when rule-based routing is off.
+    private var policy: PolicyRules.Summary?
     private var startCompletion: ((Error?) -> Void)?
     private var stopping = false
 
@@ -43,6 +47,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         self.network = network
         settings = network.loadSettings()
         os_log("Starting network %{public}@ with tinc %{public}@", log: log, type: .info, network.name, TincCore.version)
+
+        do {
+            try loadRules()
+        } catch {
+            completionHandler(TincMeshError("The routing rules have an error: \(error.localizedDescription)"))
+            return
+        }
 
         let routes = network.staticRoutes(settings).filter { settings.useExitNode || !$0.isDefaultRoute }
         let networkSettings = makeNetworkSettings(routes: routes)
@@ -150,8 +161,48 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 runner?.reload()
                 self.queue.asyncAfter(deadline: .now() + 1) { self.refreshRoutes() }
                 completionHandler?(nil)
+            case .reloadRules:
+                self.queue.async {
+                    self.reloadRules()
+                    completionHandler?(nil)
+                }
             case nil:
                 completionHandler?(nil)
+            }
+        }
+    }
+
+    // MARK: - Rules
+
+    /// Validates the network's rules and hands them to tinc (or turns rules off).
+    private func loadRules() throws {
+        guard let network, let text = network.activeRules(settings) else {
+            policy = nil
+            try TincCore.setRules(nil)
+            return
+        }
+        let summary = try TincCore.checkRules(text)
+        guard network.interfaceAddresses(settings).contains(where: { $0.family == .v4 }) else {
+            throw TincMeshError("Rule-based routing needs an IPv4 VPN address.")
+        }
+        try TincCore.setRules(text)
+        policy = summary
+        os_log("Rules: %d, FINAL %{public}@", log: log, type: .info, summary.rules, summary.final)
+    }
+
+    /// Applies edited rules to the running tunnel without reconnecting.
+    private func reloadRules() {
+        guard let network, !stopping else { return }
+        settings = network.loadSettings()
+        do {
+            try loadRules()
+        } catch {
+            os_log("Keeping previous rules: %{public}@", log: log, type: .error, error.localizedDescription)
+            return
+        }
+        setTunnelNetworkSettings(makeNetworkSettings(routes: appliedRoutes)) { [weak self] error in
+            if let error, let self {
+                os_log("Could not apply rule routes: %{public}@", log: self.log, type: .error, error.localizedDescription)
             }
         }
     }
@@ -233,7 +284,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         result.mtu = NSNumber(value: settings.mtu)
 
         // The prefix of an interface address (e.g. 10.0.0.5/24) also routes that network.
-        let allRoutes = Self.unique((routes + addresses.filter { !$0.isSingleHost }).map(\.network))
+        var included = routes + addresses.filter { !$0.isSingleHost }
+        var excluded: [IPAddressRange] = []
+        if let policy {
+            // Fake addresses for rule-matched names (and the DNS responder), plus IP-CIDR rules.
+            included += ([policy.fakeRange] + policy.includeRoutes).compactMap(IPAddressRange.init)
+            if policy.defaultRoute {
+                included += ["0.0.0.0/0", "::/0"].compactMap(IPAddressRange.init)
+            }
+            excluded = policy.excludeRoutes.compactMap(IPAddressRange.init)
+        }
+        let allRoutes = Self.unique(included.map(\.network))
 
         let v4Addresses = addresses.filter { $0.family == .v4 }
         if !v4Addresses.isEmpty {
@@ -243,6 +304,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 range.isDefaultRoute
                     ? NEIPv4Route.default()
                     : NEIPv4Route(destinationAddress: range.addressString, subnetMask: range.subnetMaskString)
+            }
+            ipv4.excludedRoutes = excluded.filter { $0.family == .v4 }.map {
+                NEIPv4Route(destinationAddress: $0.network.addressString, subnetMask: $0.subnetMaskString)
             }
             result.ipv4Settings = ipv4
         }
@@ -256,10 +320,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     ? NEIPv6Route.default()
                     : NEIPv6Route(destinationAddress: range.addressString, networkPrefixLength: NSNumber(value: range.prefix))
             }
+            ipv6.excludedRoutes = excluded.filter { $0.family == .v6 }.map {
+                NEIPv6Route(destinationAddress: $0.network.addressString, networkPrefixLength: NSNumber(value: $0.prefix))
+            }
             result.ipv6Settings = ipv6
         }
 
-        if !settings.dnsServers.isEmpty {
+        if let policy, policy.captureAllDns || !policy.matchDomains.isEmpty {
+            // tinc's policy engine answers these queries (and forwards the rest itself).
+            let dns = NEDNSSettings(servers: [policy.dnsAddress])
+            dns.matchDomains = policy.captureAllDns ? [""] : policy.matchDomains
+            if !settings.searchDomains.isEmpty {
+                dns.searchDomains = settings.searchDomains
+            }
+            result.dnsSettings = dns
+        } else if !settings.dnsServers.isEmpty {
             let dns = NEDNSSettings(servers: settings.dnsServers)
             if !settings.searchDomains.isEmpty {
                 dns.searchDomains = settings.searchDomains
