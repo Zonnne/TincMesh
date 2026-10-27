@@ -38,6 +38,9 @@ targets:
     settings:
       base:
         GCC_C_LANGUAGE_STANDARD: gnu11
+        # Vendored tinc C code: clang modules clash with its vendored
+        # struct definitions (e.g. struct icmp vs Darwin's ip_icmp.h).
+        CLANG_ENABLE_MODULES: NO
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/TincCore
           - $(SRCROOT)/TincCore/tinc

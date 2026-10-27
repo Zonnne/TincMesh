@@ -218,7 +218,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor = monitor
     }
 
-    private func pathDidChange(_ path: NWPath) {
+    private func pathDidChange(_ path: Network.NWPath) {
         // Ignore our own utun interface; only react to changes in the underlying network.
         let interfaces = path.availableInterfaces
             .filter { $0.type != .other }
